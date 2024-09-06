@@ -1,5 +1,6 @@
 import os
 import time
+import logging
 
 from locust import User, task, tag
 from web3 import Web3
@@ -43,7 +44,7 @@ class Web3User(User):
             "exception": None,
             "start_time": start_time,
             "url": f"{self.host}",
-            "response_length": 0,
+            "response_length": receipt['gasUsed'],
         }
         self.environment.events.request.fire(**request_meta)
 
@@ -64,7 +65,7 @@ class Web3User(User):
             "exception": None,
             "start_time": start_time,
             "url": f"{self.host}",
-            "response_length": 0,
+            "response_length": receipt['gasUsed'],
         }
         self.environment.events.request.fire(**request_meta)
 
@@ -79,7 +80,6 @@ class Web3User(User):
             except Web3RPCError:
                 pass
 
-        print("Funded user account with some balance")
         result = None
         while result is None:
             try:
@@ -87,11 +87,13 @@ class Web3User(User):
                        self.environment.test_token_abi, faucet)
             except Web3RPCError:
                 pass
-        print("Funded user account with some TestToken")
 
 
 @events.test_start.add_listener
 def on_locust_init(environment, **kwargs):
+    logger = logging.getLogger("web3.manager.RequestManager")
+    logger.setLevel(logging.CRITICAL)
+
     print("Deploying TestToken contract")
 
     faucet = Account.from_key(PRIVATE_KEY)
