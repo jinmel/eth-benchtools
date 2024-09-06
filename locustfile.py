@@ -1,4 +1,3 @@
-import os
 import time
 import logging
 
@@ -8,16 +7,9 @@ from web3.middleware import ExtraDataToPOAMiddleware
 from web3.exceptions import Web3RPCError
 from eth_account import Account
 from locust import events
-from locust.runners import WorkerRunner
 from lib.transfers import transfer_balance, transfer_erc20
 from lib.deployer import deploy_test_token_contract
 
-
-PRIVATE_KEY = os.getenv("PRIVATE_KEY", "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80") ## PRIVATE KEY OF THE ACCOUNT TO FUND THE USERS
-FAUCET = Account.from_key(PRIVATE_KEY)
-CHAIN_ID = os.getenv("CHAIN_ID", 901)
-HOST = os.getenv("HOST", "http://localhost:9545")
-FAUCET_NONCE = Web3(Web3.HTTPProvider(HOST)).eth.get_transaction_count(FAUCET.address)
 
 class Web3User(User):
     account: Account
@@ -28,13 +20,13 @@ class Web3User(User):
         self.w3.middleware_onion.inject(ExtraDataToPOAMiddleware, layer=0)
         self.account = Account.create()
 
-    @task
     @tag("eth")
     def transfer_balance(self):
+        chain_id = self.environment.parsed_options.chain_id
         random_account = Account.create()
         start_perf_counter = time.perf_counter()
         start_time = time.time()
-        receipt = transfer_balance(self.w3, random_account.address, CHAIN_ID, 1, self.account)
+        receipt = transfer_balance(self.w3, random_account.address, chain_id, 1, self.account)
         response_time = (time.perf_counter() - start_perf_counter) * 1000
         request_meta = {
             "request_type": "POST",
@@ -51,10 +43,11 @@ class Web3User(User):
     @task
     @tag("erc20")
     def transfer_erc20(self):
+        chain_id = self.environment.parsed_options.chain_id
         random_account = Account.create()
         start_perf_counter = time.perf_counter()
         start_time = time.time()
-        receipt = transfer_erc20(self.w3, random_account.address, CHAIN_ID, 1, self.environment.test_token_address,
+        receipt = transfer_erc20(self.w3, random_account.address, chain_id, 1, self.environment.test_token_address,
                                  self.environment.test_token_abi, self.account)
         response_time = (time.perf_counter() - start_perf_counter) * 1000
         request_meta = {
@@ -71,19 +64,20 @@ class Web3User(User):
 
     def on_start(self):
         # Generate a new private key for this Web3User instance
-        faucet = Account.from_key(PRIVATE_KEY)
+        faucet = Account.from_key(self.environment.parsed_options.faucet_pk)
+        chain_id = self.environment.parsed_options.chain_id
 
         result = None
         while result is None:
             try:
-                result = transfer_balance(self.w3, self.account.address, CHAIN_ID, 10 ** 18, faucet)
+                result = transfer_balance(self.w3, self.account.address, chain_id, 10 ** 18, faucet)
             except Web3RPCError:
                 pass
 
         result = None
         while result is None:
             try:
-               result =  transfer_erc20(self.w3, self.account.address, CHAIN_ID, 10 ** 18, self.environment.test_token_address,
+               result =  transfer_erc20(self.w3, self.account.address, chain_id, 10 ** 18, self.environment.test_token_address,
                        self.environment.test_token_abi, faucet)
             except Web3RPCError:
                 pass
@@ -94,18 +88,22 @@ def on_locust_init(environment, **kwargs):
     logger = logging.getLogger("web3.manager.RequestManager")
     logger.setLevel(logging.CRITICAL)
 
-    print("Deploying TestToken contract")
-
-    faucet = Account.from_key(PRIVATE_KEY)
-    w3 = Web3(Web3.HTTPProvider(HOST))
+    faucet = Account.from_key(environment.parsed_options.faucet_pk)
+    chain_id = environment.parsed_options.chain_id
+    w3 = Web3(Web3.HTTPProvider(environment.host))
 
     result = None
     while result is None:
         try:
-            abi, contract_address = deploy_test_token_contract(w3, faucet, CHAIN_ID)
+            abi, contract_address = deploy_test_token_contract(w3, faucet, chain_id)
             result = True
         except Web3RPCError:
             pass
-    print(f"TestToken contract deployed at address: {contract_address}")
     environment.test_token_abi = abi
     environment.test_token_address = contract_address
+
+
+@events.init_command_line_parser.add_listener
+def _(parser):
+    parser.add_argument("--faucet-pk", type=str, env_var="LOCUST_FAUCET_PK", default="0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80", help="Private key of the faucet account")
+    parser.add_argument("--chain-id", type=int, env_var="LOCUST_CHAIN_ID", default=901, help="Chain ID of the network")
