@@ -27,3 +27,7 @@ To run with both eth and erc20 transfers:
 ```sh
 poetry run locust --host <rpc-node-url> --processes 4 --users 100 --spawn-rate 10 --csv <output-prefix> --csv-full-history --faucet-pk <faucet-private-key> --chain-id <chain_id> --tags eth erc20
 ```
+
+## Notes
+
+- `response_length` has been overridden to record the gas used by the transaction.
