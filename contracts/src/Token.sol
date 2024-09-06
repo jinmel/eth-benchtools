@@ -8,11 +8,11 @@ import "@openzeppelin/contracts/access/Ownable.sol";
 contract TestToken is ERC20, ERC20Burnable, Ownable {
     uint256 private constant TOTAL_SUPPLY = 1_000_000_000 * 10**18; // 1 billion tokens
 
-    constructor(address initialOwner) 
-        ERC20("TestToken", "TEST") 
+    constructor(address initialOwner)
+        ERC20("TestToken", "TEST")
         Ownable(initialOwner)
     {
-        _mint(msg.sender, TOTAL_SUPPLY);
+        _mint(initialOwner, TOTAL_SUPPLY);
     }
 
     function mint(address to, uint256 amount) public onlyOwner {

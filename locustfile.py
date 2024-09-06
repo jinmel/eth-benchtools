@@ -1,172 +1,109 @@
 import os
-import json
-from locust import task, between, TaskSet, User
-from locust.exception import RescheduleTask
+import time
+
+from locust import User, task, tag
 from web3 import Web3
+from web3.middleware import ExtraDataToPOAMiddleware
+from web3.exceptions import Web3RPCError
 from eth_account import Account
 from locust import events
-from locust.runners import MasterRunner
+from locust.runners import WorkerRunner
+from lib.transfers import transfer_balance, transfer_erc20
+from lib.deployer import deploy_test_token_contract
 
 
-PRIVATE_KEY = os.getenv("PRIVATE_KEY", None) ## PRIVATE KEY OF THE ACCOUNT TO FUND THE USERS
-ACCOUNT = Account.from_key(PRIVATE_KEY)
-CHAIN_ID = os.getenv("CHAIN_ID", 1337)
-HOST = os.getenv("HOST", "http://localhost:8545")
-w3 = Web3(Web3.HTTPProvider(HOST))
+PRIVATE_KEY = os.getenv("PRIVATE_KEY", "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80") ## PRIVATE KEY OF THE ACCOUNT TO FUND THE USERS
+FAUCET = Account.from_key(PRIVATE_KEY)
+CHAIN_ID = os.getenv("CHAIN_ID", 901)
+HOST = os.getenv("HOST", "http://localhost:9545")
+FAUCET_NONCE = Web3(Web3.HTTPProvider(HOST)).eth.get_transaction_count(FAUCET.address)
 
-def transfer_balance(w3, target_address, private_key):
-    # Estimate gas price
-    estimated_gas_price = w3.eth.gas_price
-    
-    base_fee = w3.eth.get_block('latest')['baseFeePerGas']
-    max_priority_fee = w3.eth.max_priority_fee
-    max_fee_per_gas = base_fee + max_priority_fee
-
-    # Get the address associated with the private key
-    account = Account.from_key(private_key)
-
-    tx = {
-        "to": target_address,
-        "value": 1,
-        "gas": 21000,
-        "gasPrice": estimated_gas_price,
-        "nonce": w3.eth.get_transaction_count(account.address),
-        "chainId": CHAIN_ID,
-        "type": 2,
-        "maxFeePerGas": max_fee_per_gas,
-        "maxPriorityFeePerGas": max_priority_fee,
-    }
-    signed_tx = w3.eth.account.sign_transaction(tx, private_key)
-    tx_hash = w3.eth.send_raw_transaction(signed_tx.rawTransaction)
-    
-    # Wait for the transaction to be mined
-    tx_receipt = w3.eth.wait_for_transaction_receipt(tx_hash, timeout=30)
-    if tx_receipt['status'] != 1:
-        raise RescheduleTask()
-    else:
-        print(f"Transferred 1 wei to {target_address}")
-
-def transfer_erc20(w3, test_token_address, test_token_abi, target_address, private_key):
-    # Estimate gas price
-    estimated_gas_price = w3.eth.gas_price
-    
-    base_fee = w3.eth.get_block('latest')['baseFeePerGas']
-    max_priority_fee = w3.eth.max_priority_fee
-    max_fee_per_gas = base_fee + max_priority_fee
-
-    erc20_contract = w3.eth.contract(address=test_token_address, abi=test_token_abi)
-    
-    # Get the address associated with the private key
-    account = Account.from_key(private_key)
-    
-    # Prepare the transaction
-    transfer_txn = erc20_contract.functions.transfer(
-        target_address,
-        1  # Transfer 1 token (adjust based on token decimals)
-    ).build_transaction({
-        'chainId': CHAIN_ID,
-        'gas': 100000,  # Adjust gas limit as needed
-        'gasPrice': estimated_gas_price,
-        'nonce': w3.eth.get_transaction_count(account.address),
-        'type': 2,
-        'maxFeePerGas': max_fee_per_gas,
-        'maxPriorityFeePerGas': max_priority_fee,
-    })
-
-    # Sign and send the transaction
-    signed_txn = w3.eth.account.sign_transaction(transfer_txn, private_key)
-    tx_hash = w3.eth.send_raw_transaction(signed_txn.rawTransaction)
-    
-    # Wait for the transaction to be mined
-    tx_receipt = w3.eth.wait_for_transaction_receipt(tx_hash, timeout=30)
-    if tx_receipt['status'] != 1:
-        raise RescheduleTask()
-    else:
-        print(f"Transferred 1 ERC20 token to {target_address}")
-
-class EthereumTasks(TaskSet):
-    def make_random_account(self):
-        return Account.create()
-
-    @task
-    def transfer_balance(self):
-        target_address = self.make_random_account().address
-        transfer_balance(self.user.w3, target_address, self.user.user_private_key)
-
-    @task
-    def transfer_erc20(self):
-        target_address = self.make_random_account().address
-        transfer_erc20(self.user.w3, self.user.test_token_address, self.user.test_token_abi, target_address, self.user.user_private_key)
-
-        
 class Web3User(User):
-    tasks = [EthereumTasks]
-    wait_time = between(1, 5)
-    w3 = Web3(Web3.HTTPProvider(HOST))
+    account: Account
+
+    def __init__(self, environment):
+        super().__init__(environment)
+        self.w3 = Web3(Web3.HTTPProvider(self.host))
+        self.w3.middleware_onion.inject(ExtraDataToPOAMiddleware, layer=0)
+        self.account = Account.create()
+
+    @task
+    @tag("eth")
+    def transfer_balance(self):
+        random_account = Account.create()
+        start_perf_counter = time.perf_counter()
+        start_time = time.time()
+        receipt = transfer_balance(self.w3, random_account.address, CHAIN_ID, 1, self.account)
+        response_time = (time.perf_counter() - start_perf_counter) * 1000
+        request_meta = {
+            "request_type": "POST",
+            "response_time": response_time,
+            "name": "Transfer Balance",
+            "response": receipt,
+            "exception": None,
+            "start_time": start_time,
+            "url": f"{self.host}",
+            "response_length": 0,
+        }
+        self.environment.events.request.fire(**request_meta)
+
+    @task
+    @tag("erc20")
+    def transfer_erc20(self):
+        random_account = Account.create()
+        start_perf_counter = time.perf_counter()
+        start_time = time.time()
+        receipt = transfer_erc20(self.w3, random_account.address, CHAIN_ID, 1, self.environment.test_token_address,
+                                 self.environment.test_token_abi, self.account)
+        response_time = (time.perf_counter() - start_perf_counter) * 1000
+        request_meta = {
+            "request_type": "POST",
+            "response_time": response_time,
+            "name": "Transfer ERC20 Token",
+            "response": receipt,
+            "exception": None,
+            "start_time": start_time,
+            "url": f"{self.host}",
+            "response_length": 0,
+        }
+        self.environment.events.request.fire(**request_meta)
 
     def on_start(self):
         # Generate a new private key for this Web3User instance
-        self.user_private_key = Account.create().privateKey
-        self.user_account = Account.from_key(self.user_private_key)
-        self.user_address = self.user_account.address
+        faucet = Account.from_key(PRIVATE_KEY)
 
-        # Fund the user account from the faucet using transfer_balance function
-        transfer_balance(self.w3, self.user_address, PRIVATE_KEY)
-        print(f"User account funded successfully. Address: {self.user_address}")
+        result = None
+        while result is None:
+            try:
+                result = transfer_balance(self.w3, self.account.address, CHAIN_ID, 10 ** 18, faucet)
+            except Web3RPCError:
+                pass
 
-        # Fund the user with ERC20 tokens
-        transfer_erc20(self.w3, self.environment.test_token_address, self.environment.test_token_abi, self.user_address, PRIVATE_KEY)
+        print("Funded user account with some balance")
+        result = None
+        while result is None:
+            try:
+               result =  transfer_erc20(self.w3, self.account.address, CHAIN_ID, 10 ** 18, self.environment.test_token_address,
+                       self.environment.test_token_abi, faucet)
+            except Web3RPCError:
+                pass
+        print("Funded user account with some TestToken")
 
 
+@events.test_start.add_listener
+def on_locust_init(environment, **kwargs):
+    print("Deploying TestToken contract")
 
-@events.init.add_listener
-def on_locust_init(environment):
-    if isinstance(environment.runner, MasterRunner):
-        pass
-
-@events.init.add_listener
-def deploy_contracts(environment):
-    # only the master node should deploy the contracts
-    if not isinstance(environment.runner, MasterRunner):
-        return
-    
-    account = Account.from_key(PRIVATE_KEY)
+    faucet = Account.from_key(PRIVATE_KEY)
     w3 = Web3(Web3.HTTPProvider(HOST))
 
-    # Deploy contracts
-    # Load TestToken ABI and bytecode
-    with open('contracts/out/Token.sol/TestToken.json', 'r') as file:
-        contract_json = json.loads(file.read())
-        abi = contract_json['abi']
-        environment.test_token_abi = abi
-        bytecode = contract_json['bytecode']['object']
-
-    # Create contract instance
-    TestToken = w3.eth.contract(abi=abi, bytecode=bytecode)
-
-    # Estimate gas for deployment
-    gas_estimate = TestToken.constructor(account.address).estimate_gas()
-
-    # Prepare transaction for contract deployment
-    deploy_txn = TestToken.constructor(account.address).build_transaction({
-        'from': account.address,
-        'gas': int(gas_estimate * 1.2),  # Add 20% buffer to gas estimate
-        'gasPrice': w3.eth.gas_price,
-        'nonce': w3.eth.get_transaction_count(account.address),
-        'chainId': CHAIN_ID,
-    })
-
-    # Sign and send the transaction
-    signed_txn = account.sign_transaction(deploy_txn)
-    tx_hash = w3.eth.send_raw_transaction(signed_txn.rawTransaction)
-
-    # Wait for the transaction to be mined
-    tx_receipt = w3.eth.wait_for_transaction_receipt(tx_hash, timeout=300)
-
-    if tx_receipt['status'] == 1:
-        contract_address = tx_receipt['contractAddress']
-        print(f"TestToken deployed successfully at address: {contract_address}")
-        # Store the contract address for later use
-        environment.test_token_address = contract_address
-    else:
-        print("Failed to deploy TestToken contract")
+    result = None
+    while result is None:
+        try:
+            abi, contract_address = deploy_test_token_contract(w3, faucet, CHAIN_ID)
+            result = True
+        except Web3RPCError:
+            pass
+    print(f"TestToken contract deployed at address: {contract_address}")
+    environment.test_token_abi = abi
+    environment.test_token_address = contract_address
