@@ -36,7 +36,6 @@ def deploy_test_token_contract(w3: Web3, faucet: Account, chain_id):
 
     if tx_receipt['status'] == 1:
         contract_address = tx_receipt['contractAddress']
-        print(f"TestToken deployed successfully at address: {contract_address}")
         # Store the contract address for later use
     else:
         raise Exception("Failed to deploy TestToken contract")

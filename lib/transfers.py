@@ -25,7 +25,7 @@ def transfer_balance(w3:Web3, to, chain_id, amount, account, nonce=None):
     tx_hash = w3.eth.send_raw_transaction(signed_tx.raw_transaction)
 
     # Wait for the transaction to be mined
-    tx_receipt = w3.eth.wait_for_transaction_receipt(tx_hash, timeout=30)
+    tx_receipt = w3.eth.wait_for_transaction_receipt(tx_hash, timeout=30, poll_latency=0.5)
     if tx_receipt['status'] != 1:
         raise RescheduleTask()
     return tx_receipt
@@ -59,7 +59,7 @@ def transfer_erc20(w3, to, chain_id, amount, test_token_address, test_token_abi,
     tx_hash = w3.eth.send_raw_transaction(signed_txn.raw_transaction)
 
     # Wait for the transaction to be mined
-    tx_receipt = w3.eth.wait_for_transaction_receipt(tx_hash, timeout=30)
+    tx_receipt = w3.eth.wait_for_transaction_receipt(tx_hash, timeout=30, poll_latency=0.5)
     if tx_receipt['status'] != 1:
         raise RescheduleTask()
     return tx_receipt

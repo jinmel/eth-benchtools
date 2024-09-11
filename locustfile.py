@@ -1,7 +1,8 @@
 import time
 import logging
+import csv
 
-from locust import User, task, tag
+from locust import User, task, tag, constant_throughput
 from web3 import Web3
 from web3.middleware import ExtraDataToPOAMiddleware
 from web3.exceptions import Web3RPCError
@@ -13,6 +14,7 @@ from lib.deployer import deploy_test_token_contract
 
 class Web3User(User):
     account: Account
+    wait_time = constant_throughput(1)
 
     def __init__(self, environment):
         super().__init__(environment)
@@ -20,6 +22,7 @@ class Web3User(User):
         self.w3.middleware_onion.inject(ExtraDataToPOAMiddleware, layer=0)
         self.account = Account.create()
 
+    @task
     @tag("eth")
     def transfer_balance(self):
         chain_id = self.environment.parsed_options.chain_id
@@ -70,15 +73,15 @@ class Web3User(User):
         result = None
         while result is None:
             try:
-                result = transfer_balance(self.w3, self.account.address, chain_id, 10 ** 18, faucet)
+                result = transfer_balance(self.w3, self.account.address, chain_id, 10 ** 16, faucet)
             except Web3RPCError:
                 pass
 
         result = None
         while result is None:
             try:
-               result =  transfer_erc20(self.w3, self.account.address, chain_id, 10 ** 18, self.environment.test_token_address,
-                       self.environment.test_token_abi, faucet)
+               result = transfer_erc20(self.w3, self.account.address, chain_id, 10 ** 18,
+                                        self.environment.test_token_address, self.environment.test_token_abi, faucet)
             except Web3RPCError:
                 pass
 
@@ -107,3 +110,4 @@ def on_locust_init(environment, **kwargs):
 def _(parser):
     parser.add_argument("--faucet-pk", type=str, env_var="LOCUST_FAUCET_PK", default="0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80", help="Private key of the faucet account")
     parser.add_argument("--chain-id", type=int, env_var="LOCUST_CHAIN_ID", default=901, help="Chain ID of the network")
+    parser.add_argument('--balance-per-account', type=int, env_var="LOCUST_BALANCE_PER_ACCOUNT", default=10 ** 18, help="Initial balance per account")
