@@ -1,4 +1,3 @@
-from eth_account import Account
 from locust.exception import RescheduleTask
 from web3 import Web3
 
@@ -29,6 +28,7 @@ def transfer_balance(w3:Web3, to, chain_id, amount, account, nonce=None):
     if tx_receipt['status'] != 1:
         raise RescheduleTask()
     return tx_receipt
+
 
 def transfer_erc20(w3, to, chain_id, amount, test_token_address, test_token_abi, account, nonce=None):
     # Estimate gas price

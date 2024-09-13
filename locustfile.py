@@ -1,6 +1,5 @@
 import time
 import logging
-import csv
 
 from locust import User, task, tag, constant_throughput
 from web3 import Web3
@@ -73,15 +72,17 @@ class Web3User(User):
         result = None
         while result is None:
             try:
-                result = transfer_balance(self.w3, self.account.address, chain_id, 10 ** 16, faucet)
+                result = transfer_balance(self.w3, self.account.address, chain_id,
+                                          self.environment.parsed_options.fund_amount, faucet)
             except Web3RPCError:
                 pass
 
         result = None
         while result is None:
             try:
-               result = transfer_erc20(self.w3, self.account.address, chain_id, 10 ** 18,
-                                        self.environment.test_token_address, self.environment.test_token_abi, faucet)
+                result = transfer_erc20(
+                    self.w3, self.account.address, chain_id, self.environment.parsed_options.fund_amount,
+                    self.environment.test_token_address, self.environment.test_token_abi, faucet)
             except Web3RPCError:
                 pass
 
@@ -110,4 +111,4 @@ def on_locust_init(environment, **kwargs):
 def _(parser):
     parser.add_argument("--faucet-pk", type=str, env_var="LOCUST_FAUCET_PK", default="0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80", help="Private key of the faucet account")
     parser.add_argument("--chain-id", type=int, env_var="LOCUST_CHAIN_ID", default=901, help="Chain ID of the network")
-    parser.add_argument('--balance-per-account', type=int, env_var="LOCUST_BALANCE_PER_ACCOUNT", default=10 ** 18, help="Initial balance per account")
+    parser.add_argument('--fund_amount', type=int, env_var="LOCUST_FUND_AMOUNT", default=10 ** 18, help="Funded balance per account")
