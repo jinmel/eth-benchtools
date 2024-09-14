@@ -20,6 +20,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/accounts/abi/bind"
 	"github.com/ethereum/go-ethereum/common"
@@ -128,7 +129,7 @@ func readOrCreateAccounts(accountsFile string, numAccounts int) ([]*ecdsa.Privat
 		}
 	} else {
 		// File does not exist, create accounts
-		fmt.Printf("Generating %d accounts\n", numAccounts)
+		log.Printf("Generating %d accounts\n", numAccounts)
 		for i := 0; i < numAccounts; i++ {
 			pk, err := crypto.GenerateKey()
 			if err != nil {
@@ -242,7 +243,10 @@ func fundAccounts(client *ethclient.Client, accounts []*ecdsa.PrivateKey, fundAm
 		return fmt.Errorf("failed to get nonce: %v", err)
 	}
 
-	var lastTx *types.Transaction
+	gasPrice, err := client.SuggestGasPrice(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to suggest gas price: %v", err)
+	}
 
 	for _, account := range accounts {
 		accountAddress := crypto.PubkeyToAddress(account.PublicKey)
@@ -250,236 +254,305 @@ func fundAccounts(client *ethclient.Client, accounts []*ecdsa.PrivateKey, fundAm
 		if err != nil {
 			log.Printf("failed to get balance for %s: %v", accountAddress.Hex(), err)
 		}
-		log.Printf("Balance of %s: %s ETH", accountAddress.Hex(), weiToEther(balance))
 		value := new(big.Int).Sub(fundAmount, balance)
 		if value.Sign() > 0 {
-			// Transfer Ether
-			fmt.Printf("Transferring %s ETH to %s\n", weiToEther(value), accountAddress.Hex())
+			go func(nonce uint64) {
+				// Transfer Ether
+				log.Printf("Transferring %s ETH to %s\n", weiToEther(value), accountAddress.Hex())
+				tx := types.NewTransaction(nonce, accountAddress, value, uint64(21000), gasPrice, nil)
+				signedTx, err := auth.Signer(auth.From, tx)
+				if err != nil {
+					log.Printf("failed to sign transaction: %v", err)
+				}
 
-			gasPrice, err := client.SuggestGasPrice(ctx)
-			if err != nil {
-				log.Printf("failed to suggest gas price: %v", err)
-				continue
-			}
-
-			tx := types.NewTransaction(nonce, accountAddress, value, uint64(21000), gasPrice, nil)
+				err = client.SendTransaction(ctx, signedTx)
+				if err != nil {
+					log.Printf("failed to send transaction: %v", err)
+				}
+			}(nonce)
 			nonce++
-			signedTx, err := auth.Signer(auth.From, tx)
-			if err != nil {
-				log.Printf("failed to sign transaction: %v", err)
-				continue
-			}
-
-			err = client.SendTransaction(ctx, signedTx)
-			if err != nil {
-				log.Printf("failed to send transaction: %v", err)
-				continue
-			}
 		} else {
-			fmt.Printf("Account %s already funded with %s ETH\n", accountAddress.Hex(), weiToEther(balance))
+			log.Printf("Account %s already funded with %s ETH\n", accountAddress.Hex(), weiToEther(balance))
 		}
 
 		// Transfer ERC20 tokens
-		fmt.Printf("Transferring %s ERC20 tokens to %s\n", weiToEther(big.NewInt(1e18)), accountAddress.Hex())
-
-		auth.Nonce = big.NewInt(int64(nonce))
+		go func(nonce uint64) {
+			clonedAuth := *auth
+			log.Printf("Transferring %s ERC20 tokens to %s\n", weiToEther(big.NewInt(1e18)), accountAddress.Hex())
+			clonedAuth.Nonce = big.NewInt(int64(nonce))
+			nonce++
+			_, err = tokenContract.Transact(&clonedAuth, "transfer", accountAddress, big.NewInt(1e18))
+			if err != nil {
+				log.Printf("failed to transfer ERC20 tokens: %v", err)
+			}
+		}(nonce)
 		nonce++
-		lastTx, err = tokenContract.Transact(auth, "transfer", accountAddress, big.NewInt(1e18))
-		if err != nil {
-			log.Printf("failed to transfer ERC20 tokens: %v", err)
-			continue
-		}
-	}
-
-	// Wait for the last transaction to be mined
-	if lastTx != nil {
-		_, err = bind.WaitMined(ctx, client, lastTx)
-		if err != nil {
-			log.Printf("failed to wait for last transaction: %v", err)
-		}
+		log.Printf("Transferring %s ERC20 tokens to %s\n", weiToEther(big.NewInt(1e18)), accountAddress.Hex())
 	}
 
 	return nil
 }
 
+func transferEthLegacyTx(ctx context.Context, client *ethclient.Client, account *ecdsa.PrivateKey, to *common.Address, chainID *big.Int, nonce *big.Int) (*types.Receipt, error) {
+	// Create transactor
+	auth, err := bind.NewKeyedTransactorWithChainID(account, chainID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create transactor: %v", err)
+	}
+
+	gasPrice, err := client.SuggestGasPrice(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("Failed to suggest gas price: %v", err)
+	}
+
+	value := big.NewInt(1) // Transfer 1 wei
+
+	// Update auth object
+	auth.Nonce = nonce
+	auth.Value = value            // in wei
+	auth.GasLimit = uint64(21000) // standard gas limit for ETH transfer
+	auth.GasPrice = gasPrice
+
+	log.Printf("Transferring %s ETH from %s to %s\n", weiToEther(value), auth.From.Hex(), to.Hex())
+
+	tx := types.NewTransaction(auth.Nonce.Uint64(), *to, value, auth.GasLimit, auth.GasPrice, nil)
+
+	signedTx, err := auth.Signer(auth.From, tx)
+
+	err = client.SendTransaction(ctx, signedTx)
+	if err != nil {
+		return nil, fmt.Errorf("Failed to send transaction: %v", err)
+	}
+
+	receipt, err := bind.WaitMined(ctx, client, signedTx)
+	if err != nil {
+		return nil, fmt.Errorf("Failed to wait for transaction: %v", err)
+	}
+
+	return receipt, nil
+}
+
+func transferEthEIP1559(ctx context.Context, client *ethclient.Client, account *ecdsa.PrivateKey, to *common.Address, chainID *big.Int, nonce *big.Int) (*types.Receipt, error) {
+	// Create transactor
+	auth, err := bind.NewKeyedTransactorWithChainID(account, chainID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create transactor: %v", err)
+	}
+
+	// Suggest the max fee per gas and max priority fee per gas
+	tipCap, err := client.SuggestGasTipCap(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("Failed to suggest gas tip cap: %v", err)
+	}
+
+	gasFeeCap, err := client.SuggestGasPrice(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("Failed to suggest gas fee cap: %v", err)
+	}
+
+	value := big.NewInt(1) // Transfer 1 wei
+
+	// Update auth object
+	auth.Nonce = nonce
+	auth.Value = value            // in wei
+	auth.GasLimit = uint64(21000) // standard gas limit for ETH transfer
+	auth.GasFeeCap = gasFeeCap    // max fee per gas (base fee + priority fee)
+	auth.GasTipCap = tipCap       // max priority fee per gas
+	auth.GasPrice = nil           // no gas price
+
+	log.Printf("Transferring %s ETH from %s to %s\n", weiToEther(value), auth.From.Hex(), to.Hex())
+
+	// Create the EIP-1559 transaction
+	tx := types.NewTx(&types.DynamicFeeTx{
+		ChainID:   chainID,
+		Nonce:     auth.Nonce.Uint64(),
+		GasFeeCap: auth.GasFeeCap,
+		GasTipCap: auth.GasTipCap,
+		Gas:       auth.GasLimit,
+		To:        to,
+		Value:     auth.Value,
+		Data:      nil, // No data for simple ETH transfer
+	})
+
+	signedTx, err := auth.Signer(auth.From, tx)
+	if err != nil {
+		return nil, fmt.Errorf("Failed to sign transaction: %v", err)
+	}
+
+	err = client.SendTransaction(ctx, signedTx)
+	if err != nil {
+		return nil, fmt.Errorf("Failed to send transaction: %v", err)
+	}
+
+	receipt, err := bind.WaitMined(ctx, client, signedTx)
+	if err != nil {
+		return nil, fmt.Errorf("Failed to wait for transaction: %v", err)
+	}
+
+	return receipt, nil
+}
+
+func transferERC20(ctx context.Context, client *ethclient.Client, account *ecdsa.PrivateKey, to *common.Address, chainID *big.Int, nonce *big.Int, tokenContractAddress common.Address, tokenABI abi.ABI) (*types.Receipt, error) {
+	tokenContract := bind.NewBoundContract(tokenContractAddress, tokenABI, client, client, client)
+	tokenValue := big.NewInt(1) // Adjust token amount as needed
+
+	auth, err := bind.NewKeyedTransactorWithChainID(account, chainID)
+	if err != nil {
+		return nil, fmt.Errorf("Failed to create transactor: %v", err)
+	}
+
+	// Update auth object for token transfer
+	auth.Nonce = nonce
+	auth.Value = big.NewInt(0) // No ETH is being sent
+
+	// Remove hardcoded gas limit
+	// auth.GasLimit = uint64(70000)
+
+	// Get suggested gas tip cap
+	gasTipCap, err := client.SuggestGasTipCap(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("Failed to suggest gas tip cap: %v", err)
+	}
+
+	// Get base fee from the latest block header
+	header, err := client.HeaderByNumber(ctx, nil) // nil gets the latest block
+	if err != nil {
+		return nil, fmt.Errorf("Failed to get latest block header: %v", err)
+	}
+	baseFee := header.BaseFee
+	if baseFee == nil {
+		return nil, fmt.Errorf("Base fee is nil. Ensure that EIP-1559 is activated on this network.")
+	}
+
+	// Compute gas fee cap (maxFeePerGas)
+	gasFeeCap := new(big.Int).Add(
+		new(big.Int).Mul(baseFee, big.NewInt(2)), // baseFee * 2
+		gasTipCap,                                // + gasTipCap
+	)
+
+	// Set the auth.GasFeeCap and auth.GasTipCap
+	auth.GasFeeCap = gasFeeCap
+	auth.GasTipCap = gasTipCap
+	auth.GasPrice = nil
+
+	// Prepare the transaction data
+	data, err := tokenABI.Pack("transfer", to, tokenValue)
+	if err != nil {
+		return nil, fmt.Errorf("Failed to pack transfer data: %v", err)
+	}
+
+	// Create a call message for estimating gas
+	callMsg := ethereum.CallMsg{
+		From:      auth.From,
+		To:        &tokenContractAddress,
+		Gas:       0, // gas is set to 0, which means gas estimation is needed
+		Value:     big.NewInt(0),
+		Data:      data,
+		GasFeeCap: gasFeeCap,
+		GasTipCap: gasTipCap,
+	}
+
+	// Estimate gas limit
+	gasLimit, err := client.EstimateGas(ctx, callMsg)
+	if err != nil {
+		return nil, fmt.Errorf("Failed to estimate gas: %v", err)
+	}
+
+	// Optionally add a buffer to the estimated gas limit
+	gasLimit = gasLimit + gasLimit/10 // Increase gas limit by 10%
+
+	// Set the gas limit in the auth
+	auth.GasLimit = gasLimit
+
+	log.Printf("Transferring %s tokens from %s to %s\n", tokenValue.String(), auth.From.Hex(), to.Hex())
+	tx, err := tokenContract.Transact(auth, "transfer", to, tokenValue)
+	if err != nil {
+		return nil, fmt.Errorf("Failed to create token transfer transaction: %v", err)
+	}
+
+	// Wait for transaction to be mined
+	receipt, err := bind.WaitMined(ctx, client, tx)
+	if err != nil {
+		return nil, fmt.Errorf("Failed to wait for token transfer transaction: %v", err)
+	}
+	return receipt, nil
+}
+
 func transferTokens(client *ethclient.Client, accounts []*ecdsa.PrivateKey, chainID *big.Int, tokenAddress common.Address, tokenABI abi.ABI, txCount int, outputDir string) error {
 	var wg sync.WaitGroup
-	ctx := context.Background()
-
-	// Create instance of token contract
-	tokenContract := bind.NewBoundContract(tokenAddress, tokenABI, client, client, client)
 
 	for _, account := range accounts {
-		account := account // Capture range variable
 		wg.Add(1)
-		go func() {
+
+		go func(acc *ecdsa.PrivateKey) {
 			defer wg.Done()
+
+			ctx := context.Background()
 
 			data := []map[string]interface{}{}
 
-			// Create transactor
-			auth, err := bind.NewKeyedTransactorWithChainID(account, chainID)
-			if err != nil {
-				log.Printf("Failed to create transactor: %v", err)
-				return
-			}
-
-			// Get the starting nonce
-			nonce, err := client.PendingNonceAt(ctx, auth.From)
+			nonce, err := client.PendingNonceAt(ctx, crypto.PubkeyToAddress(acc.PublicKey))
 			if err != nil {
 				log.Printf("Failed to get nonce: %v", err)
-				return
-			}
-
-			gasPrice, err := client.SuggestGasPrice(ctx)
-			if err != nil {
-				log.Printf("Failed to suggest gas price: %v", err)
 				return
 			}
 
 			for i := 0; i < txCount; i++ {
 				toAccount := accounts[rand.Intn(len(accounts))]
 				toAddress := crypto.PubkeyToAddress(toAccount.PublicKey)
+				startTime := time.Now()
 
-				// Transfer ETH
-				{
-					value := big.NewInt(1) // Transfer 1 wei
-
-					// Update auth object
-					auth.Nonce = big.NewInt(int64(nonce))
-					nonce++
-					auth.Value = value            // in wei
-					auth.GasLimit = uint64(21000) // standard gas limit for ETH transfer
-					auth.GasPrice = gasPrice
-
-					startTime := time.Now()
-
-					log.Printf("Transferring %s ETH from %s to %s\n", weiToEther(value), auth.From.Hex(), toAddress.Hex())
-					tx := types.NewTransaction(auth.Nonce.Uint64(), toAddress, value, auth.GasLimit, auth.GasPrice, nil)
-					signedTx, err := auth.Signer(auth.From, tx)
-					if err != nil {
-						log.Printf("Failed to sign transaction: %v", err)
-						return
-					}
-
-					err = client.SendTransaction(ctx, signedTx)
-					if err != nil {
-						log.Printf("Failed to send transaction: %v", err)
-						return
-					}
-
-					// Wait for transaction to be mined
-					receipt, err := bind.WaitMined(ctx, client, signedTx)
-					if err != nil {
-						log.Printf("Failed to wait for transaction: %v", err)
-						return
-					}
-					endTime := time.Now()
-
-					receiptMap := map[string]interface{}{
-						"tx_hash":         receipt.TxHash.Hex(),
-						"block_number":    receipt.BlockNumber.Uint64(),
-						"gas_used":        receipt.GasUsed,
-						"status":          receipt.Status,
-						"start_time":      startTime.UnixMilli(),
-						"end_time":        endTime.UnixMilli(),
-						"time_to_include": endTime.Sub(startTime).Milliseconds(),
-					}
-					data = append(data, receiptMap)
+				var kind string
+				var receipt *types.Receipt
+				switch rand.Intn(2) {
+				case 0:
+					kind = "erc20-transfer"
+					receipt, err = transferERC20(ctx, client, acc, &toAddress, chainID, big.NewInt(int64(nonce)), tokenAddress, tokenABI)
+				// case 0:
+				// 	kind = "eth-transfer-legacy"
+				// 	receipt, err = transferEthLegacyTx(ctx, client, acc, &toAddress, chainID, big.NewInt(int64(nonce)))
+				case 1:
+					kind = "eth-transfer-eip1559"
+					receipt, err = transferEthEIP1559(ctx, client, acc, &toAddress, chainID, big.NewInt(int64(nonce)))
 				}
 
-				// Transfer ERC20 Tokens
-				{
-					tokenValue := big.NewInt(1) // Adjust token amount as needed
-
-					// Update auth object for token transfer
-					auth.Nonce = big.NewInt(int64(nonce))
-					nonce++
-					auth.Value = big.NewInt(0)    // No ETH is being sent
-					auth.GasLimit = uint64(70000) // Adjust gas limit as needed
-
-					// Remove auth.GasPrice
-					// Set auth.GasFeeCap and auth.GasTipCap
-
-					// Get suggested gas tip cap
-					gasTipCap, err := client.SuggestGasTipCap(ctx)
-					if err != nil {
-						log.Printf("Failed to suggest gas tip cap: %v", err)
-						return
-					}
-
-					// Get base fee from the latest block header
-					header, err := client.HeaderByNumber(ctx, nil) // nil gets the latest block
-					if err != nil {
-						log.Printf("Failed to get latest block header: %v", err)
-						return
-					}
-					baseFee := header.BaseFee
-					if baseFee == nil {
-						log.Printf("Base fee is nil. Ensure that EIP-1559 is activated on this network.")
-						return
-					}
-
-					// Compute gas fee cap (maxFeePerGas)
-					// For example, set gasFeeCap = baseFee * 2 + gasTipCap
-					gasFeeCap := new(big.Int).Add(
-						new(big.Int).Mul(baseFee, big.NewInt(2)), // baseFee * 2
-						gasTipCap,                                // + gasTipCap
-					)
-
-					// Set the auth.GasFeeCap and auth.GasTipCap
-					auth.GasFeeCap = gasFeeCap
-					auth.GasTipCap = gasTipCap
-					auth.GasPrice = nil
-
-					startTime := time.Now()
-
-					log.Printf("Transferring %s tokens from %s to %s\n", tokenValue.String(), auth.From.Hex(), toAddress.Hex())
-					tx, err := tokenContract.Transact(auth, "transfer", toAddress, tokenValue)
-					if err != nil {
-						log.Printf("Failed to create token transfer transaction: %v", err)
-						return
-					}
-
-					// No need to call client.SendTransaction as Transact handles it
-					// Wait for transaction to be mined
-					receipt, err := bind.WaitMined(ctx, client, tx)
-					if err != nil {
-						log.Printf("Failed to wait for token transfer transaction: %v", err)
-						return
-					}
-					endTime := time.Now()
-
-					receiptMap := map[string]interface{}{
-						"tx_hash":         receipt.TxHash.Hex(),
-						"block_number":    receipt.BlockNumber.Uint64(),
-						"gas_used":        receipt.GasUsed,
-						"status":          receipt.Status,
-						"start_time":      startTime.UnixMilli(),
-						"end_time":        endTime.UnixMilli(),
-						"time_to_include": endTime.Sub(startTime).Milliseconds(),
-					}
-					data = append(data, receiptMap)
+				if err != nil {
+					log.Printf("Failed to transfer tokens: %v", err)
+					continue
 				}
+
+				// update nonce
+				nonce++
+				endTime := time.Now()
+				receiptMap := map[string]interface{}{
+					"kind":            kind,
+					"tx_hash":         receipt.TxHash.Hex(),
+					"block_number":    receipt.BlockNumber.Uint64(),
+					"gas_used":        receipt.GasUsed,
+					"status":          receipt.Status,
+					"start_time":      startTime.UnixMilli(),
+					"end_time":        endTime.UnixMilli(),
+					"time_to_include": endTime.Sub(startTime).Microseconds(),
+				}
+				data = append(data, receiptMap)
 			}
 
 			// Write data to CSV
-			writeToRandomFile(data, outputDir, "eth-transfer-")
-		}()
+			writeToRandomFile(data, outputDir)
+		}(account)
 	}
-
 	wg.Wait()
 	return nil
 }
 
 // writeToRandomFile writes data to a CSV file with a random name.
-func writeToRandomFile(data []map[string]interface{}, outputDir, filePrefix string) {
+func writeToRandomFile(data []map[string]interface{}, outputDir string) {
 	if len(data) == 0 {
 		log.Println("No data to write")
 		return
 	}
 	randomName := getRandomName()
-	filename := filepath.Join(outputDir, fmt.Sprintf("%s%s.csv", filePrefix, randomName))
+	filename := filepath.Join(outputDir, fmt.Sprintf("%s.csv", randomName))
 
 	file, err := os.Create(filename)
 	if err != nil {
@@ -515,7 +588,7 @@ func writeToRandomFile(data []map[string]interface{}, outputDir, filePrefix stri
 	}
 	writer.Flush()
 
-	fmt.Printf("Done writing to %s\n", filename)
+	log.Printf("Done writing to %s\n", filename)
 }
 
 // getRandomName generates a random string of 8 characters.
