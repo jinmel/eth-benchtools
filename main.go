@@ -238,60 +238,67 @@ func fundAccounts(client *ethclient.Client, accounts []*ecdsa.PrivateKey, fundAm
 
 	nonce, err := client.PendingNonceAt(ctx, faucetAddress)
 
-	safeNonce := SafeNonce{nonce: nonce, mu: sync.Mutex{}}
-
 	if err != nil {
 		return fmt.Errorf("failed to get nonce: %v", err)
 	}
 
+	var lastTx *types.Transaction
+
 	for _, account := range accounts {
 		accountAddress := crypto.PubkeyToAddress(account.PublicKey)
+		balance, err := client.BalanceAt(ctx, accountAddress, nil)
+		if err != nil {
+			log.Printf("failed to get balance for %s: %v", accountAddress.Hex(), err)
+		}
+		log.Printf("Balance of %s: %s ETH", accountAddress.Hex(), weiToEther(balance))
+		value := new(big.Int).Sub(fundAmount, balance)
+		if value.Sign() > 0 {
+			// Transfer Ether
+			fmt.Printf("Transferring %s ETH to %s\n", weiToEther(value), accountAddress.Hex())
 
-		go func() {
-			balance, err := client.BalanceAt(ctx, accountAddress, nil)
+			gasPrice, err := client.SuggestGasPrice(ctx)
 			if err != nil {
-				log.Printf("failed to get balance for %s: %v", accountAddress.Hex(), err)
-			}
-			log.Printf("Balance of %s: %s ETH", accountAddress.Hex(), weiToEther(balance))
-			value := new(big.Int).Sub(fundAmount, balance)
-			if value.Sign() > 0 {
-				// Transfer Ether
-				fmt.Printf("Transferring %s ETH to %s\n", weiToEther(value), accountAddress.Hex())
-
-				gasPrice, err := client.SuggestGasPrice(ctx)
-				if err != nil {
-					log.Printf("failed to suggest gas price: %v", err)
-					return
-				}
-
-				tx := types.NewTransaction(safeNonce.GetAndIncrement(), accountAddress, value, uint64(21000), gasPrice, nil)
-				signedTx, err := auth.Signer(auth.From, tx)
-				if err != nil {
-					log.Printf("failed to sign transaction: %v", err)
-					return
-				}
-
-				err = client.SendTransaction(ctx, signedTx)
-				if err != nil {
-					log.Printf("failed to send transaction: %v", err)
-					return
-				}
-			} else {
-				fmt.Printf("Account %s already funded with %s ETH\n", accountAddress.Hex(), weiToEther(balance))
+				log.Printf("failed to suggest gas price: %v", err)
+				continue
 			}
 
-			// Transfer ERC20 tokens
-			fmt.Printf("Transferring %s ERC20 tokens to %s\n", weiToEther(big.NewInt(1e18)), accountAddress.Hex())
-
-			auth.Nonce = big.NewInt(int64(safeNonce.GetAndIncrement()))
-
-			_, err = tokenContract.Transact(auth, "transfer", accountAddress, big.NewInt(1e18))
+			tx := types.NewTransaction(nonce, accountAddress, value, uint64(21000), gasPrice, nil)
+			nonce++
+			signedTx, err := auth.Signer(auth.From, tx)
 			if err != nil {
-				log.Printf("failed to transfer ERC20 tokens: %v", err)
-				return
+				log.Printf("failed to sign transaction: %v", err)
+				continue
 			}
-		}()
+
+			err = client.SendTransaction(ctx, signedTx)
+			if err != nil {
+				log.Printf("failed to send transaction: %v", err)
+				continue
+			}
+		} else {
+			fmt.Printf("Account %s already funded with %s ETH\n", accountAddress.Hex(), weiToEther(balance))
+		}
+
+		// Transfer ERC20 tokens
+		fmt.Printf("Transferring %s ERC20 tokens to %s\n", weiToEther(big.NewInt(1e18)), accountAddress.Hex())
+
+		auth.Nonce = big.NewInt(int64(nonce))
+		nonce++
+		lastTx, err = tokenContract.Transact(auth, "transfer", accountAddress, big.NewInt(1e18))
+		if err != nil {
+			log.Printf("failed to transfer ERC20 tokens: %v", err)
+			continue
+		}
 	}
+
+	// Wait for the last transaction to be mined
+	if lastTx != nil {
+		_, err = bind.WaitMined(ctx, client, lastTx)
+		if err != nil {
+			log.Printf("failed to wait for last transaction: %v", err)
+		}
+	}
+
 	return nil
 }
 
