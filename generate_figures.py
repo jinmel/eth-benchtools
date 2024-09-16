@@ -95,11 +95,11 @@ def print_stats(df):
 
     # Print the Results
     stats_output = (
-        f"Total Number of Transactions: {total_transactions}\n"
-        f"Total Gas Used: {total_gas}\n"
-        f"Total Time Period: {total_time_seconds:.2f} seconds\n"
-        f"Transactions Per Second (TPS): {tx_per_second:.2f} tx/s\n"
-        f"Gas Used Per Second: {gas_per_second:.2f} gas/s\n"
+        f" - Total Number of Transactions: {total_transactions}\n\n"
+        f" - Total Gas Used: {total_gas}\n\n"
+        f" - Total Time Period: {total_time_seconds:.2f} seconds\n\n"
+        f" - Transactions Per Second (TPS): {tx_per_second:.2f} tx/s\n\n"
+        f" - Gas Used Per Second: {gas_per_second:.2f} gas/s\n"
     )
 
     return stats_output

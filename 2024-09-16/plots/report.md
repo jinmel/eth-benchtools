@@ -1,10 +1,14 @@
 # Conduit chain performance report
 
-Total Number of Transactions: 99998
-Total Gas Used: 2772887714
-Total Time Period: 321.35 seconds
-Transactions Per Second (TPS): 311.18 tx/s
-Gas Used Per Second: 8628817.35 gas/s
+ - Total Number of Transactions: 99998
+
+ - Total Gas Used: 2772887714
+
+ - Total Time Period: 321.35 seconds
+
+ - Transactions Per Second (TPS): 311.18 tx/s
+
+ - Gas Used Per Second: 8628817.35 gas/s
 ## Histogram of Transaction Confirmation Times
 
 ![Histogram of Transaction Confirmation Times](plot_1_histogram_confirmation_times.png)
