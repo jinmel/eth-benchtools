@@ -2,32 +2,25 @@
 
 ## Introduction
 
-Locust for load testing rpc node with spam transactions.
+Load test tools for ethereum execution clients
 
 ## How to run
 
+### Build the contracts
 ```sh
 cd contracts
 forge build
-poetry run locust --host <rpc-node-url> --processes 4 --users 100 --spawn-rate 10 --csv <output-prefix> --csv-full-history --faucet-pk <faucet-private-key> --chain-id <chain_id>
 ```
 
-Go to `localhost:8089` to see the locust dashboard.
-
-### Additional options
-
-Specify the transaction types to run with tags. For example, to run only `eth_transfer` type transactions:
+### Run the benchmark
 
 ```sh
-poetry run locust --host <rpc-node-url> --processes 4 --users 100 --spawn-rate 10 --csv <output-prefix> --csv-full-history --faucet-pk <faucet-private-key> --chain-id <chain_id> --tags eth
+go build
+./eth-benchtools  --accounts_file accounts.txt --output_dir ./out --host <rpc_endpoint> --fund_amount 0.01 --faucet_pk <your_faucet_private_key> --chain_id <chain_id> --num_accounts 1000
 ```
 
-To run with both eth and erc20 transfers:
+### Generate the benchmark report
 
 ```sh
-poetry run locust --host <rpc-node-url> --processes 4 --users 100 --spawn-rate 10 --csv <output-prefix> --csv-full-history --faucet-pk <faucet-private-key> --chain-id <chain_id> --tags eth erc20
+python generate_figures.py --data_folder ./out --plots_dir ./plots
 ```
-
-## Notes
-
-- `response_length` has been overridden to record the gas used by the transaction.
