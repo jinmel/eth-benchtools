@@ -1,14 +1,15 @@
 # Conduit chain performance report
 
- - Total Number of Transactions: 99998
 
- - Total Gas Used: 2772887714
-
- - Total Time Period: 321.35 seconds
-
- - Transactions Per Second (TPS): 311.18 tx/s
-
- - Gas Used Per Second: 8628817.35 gas/s
+===== Ethereum Transaction Metrics =====
+Total Number of Transactions: 99998
+Total Gas Used: 2772887714
+Total Time Period: 321.35 seconds
+Transactions Per Second (TPS): 311.18 tx/s
+Gas Used Per Second: 8628817.35 gas/s
+Median Time to Inclusion: 2594.00 ms
+Mean Time to Inclusion: 2969.55 ms
+=========================================
 ## Histogram of Transaction Confirmation Times
 
 ![Histogram of Transaction Confirmation Times](plot_1_histogram_confirmation_times.png)

@@ -38,7 +38,6 @@ def read_csv_files(folder_path):
     logging.info(f"Combined DataFrame shape: {combined_df.shape}")
     return combined_df
 
-
 def print_stats(df):
     """
     Calculates and prints Ethereum transaction metrics:
@@ -47,6 +46,8 @@ def print_stats(df):
     - Total time period in seconds
     - Transactions per second (TPS)
     - Gas used per second
+    - Median time to inclusion (in milliseconds)
+    - Mean time to inclusion (in milliseconds)
 
     Args:
         df (pd.DataFrame): DataFrame containing Ethereum transaction data.
@@ -68,7 +69,7 @@ def print_stats(df):
         return
 
     # Calculate 'time_to_include' in milliseconds
-    df['time_to_include'] = (df['end_time'] - df['start_time']).dt.total_seconds() * 1000  # ms
+    df['time_to_include'] = (df['end_time'] - df['start_time']).dt.total_seconds() * 1000  # in ms
 
     # Calculate Total Number of Transactions
     total_transactions = len(df)
@@ -93,16 +94,24 @@ def print_stats(df):
     tx_per_second = total_transactions / total_time_seconds
     gas_per_second = total_gas / total_time_seconds
 
+    # Calculate the Median and Mean of Time to Inclusion (in milliseconds)
+    median_time_to_inclusion = df['time_to_include'].median()
+    mean_time_to_inclusion = df['time_to_include'].mean()
+
     # Print the Results
     stats_output = (
-        f" - Total Number of Transactions: {total_transactions}\n\n"
-        f" - Total Gas Used: {total_gas}\n\n"
-        f" - Total Time Period: {total_time_seconds:.2f} seconds\n\n"
-        f" - Transactions Per Second (TPS): {tx_per_second:.2f} tx/s\n\n"
-        f" - Gas Used Per Second: {gas_per_second:.2f} gas/s\n"
+        "\n===== Ethereum Transaction Metrics =====\n"
+        f"Total Number of Transactions: {total_transactions}\n"
+        f"Total Gas Used: {total_gas}\n"
+        f"Total Time Period: {total_time_seconds:.2f} seconds\n"
+        f"Transactions Per Second (TPS): {tx_per_second:.2f} tx/s\n"
+        f"Gas Used Per Second: {gas_per_second:.2f} gas/s\n"
+        f"Median Time to Inclusion: {median_time_to_inclusion:.2f} ms\n"
+        f"Mean Time to Inclusion: {mean_time_to_inclusion:.2f} ms\n"
+        "=========================================\n"
     )
-
     return stats_output
+
 
 def plot_data(df, plots_info):
     """
