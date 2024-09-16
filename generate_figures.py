@@ -357,7 +357,7 @@ def main(_):
         md_file.write(print_stats_output)
         for filename, title in plots_info:
             md_file.write(f'## {title}\n\n')
-            md_file.write(f'![{title}](./{FLAGS.plots_dir}/{filename})\n\n')
+            md_file.write(f'![{title}]({filename})\n\n')
 
     logging.info(f"Plots have been saved to the '{FLAGS.plots_dir}' directory.")
     logging.info(f"Markdown file '{markdown_filename}' has been generated.")
