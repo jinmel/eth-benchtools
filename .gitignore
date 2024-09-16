@@ -2,4 +2,4 @@
 __pycache__
 *.ipynb_checkpoints
 *.txt
-web3-locust
+eth-benchtools

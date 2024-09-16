@@ -1,4 +1,4 @@
-module github.com/jinmel/web3-locust
+module github.com/jinmel/eth-benchtools
 
 go 1.21.0
 
