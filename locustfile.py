@@ -1,6 +1,7 @@
 import time
 import logging
 
+import locust.stats
 from locust import User, task, tag, constant_throughput
 from web3 import Web3
 from web3.middleware import ExtraDataToPOAMiddleware
@@ -9,6 +10,9 @@ from eth_account import Account
 from locust import events
 from lib.transfers import transfer_balance, transfer_erc20
 from lib.deployer import deploy_test_token_contract
+
+
+locust.stats.CSV_STATS_INTERVAL_SEC = 5 # default is 1 second
 
 
 class Web3User(User):
