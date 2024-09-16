@@ -1,4 +1,4 @@
-# Web3 locust
+# Eth-benchtools
 
 ## Introduction
 
